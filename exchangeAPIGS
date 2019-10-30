@@ -1,0 +1,68 @@
+function APIBIN (asset) {
+  
+
+  var res = "https://api.binance.com/api/v3/avgPrice?symbol=";
+  var url = res + asset + "BTC"
+  
+  var urlFetch = UrlFetchApp.fetch(url)
+                              
+  var content = urlFetch.getContentText();
+  
+  var json = JSON.parse(content);
+  var base = json["price"];
+  
+  return base;
+                  
+}
+
+function APIHIT (asset) {
+  
+
+  var res = "https://api.hitbtc.com/api/2/public/ticker/";
+  var url = res + asset + "BTC"
+  
+  var urlFetch = UrlFetchApp.fetch(url);
+                              
+  var content = urlFetch.getContentText();
+  
+  var json = JSON.parse(content);
+  var base = json["last"];
+  
+  return base;
+                  
+}
+
+function APIBTX (asset) {
+  
+
+  var res = "https://api.bittrex.com/api/v1.1/public/getticker?market=BTC-";
+  var url = res + asset
+  
+  var urlFetch = UrlFetchApp.fetch(url);
+                              
+  var content = urlFetch.getContentText();
+  
+  var json = JSON.parse(content);
+  var base = json["result"]["Last"];
+  
+  return base;
+                  
+}
+function APIKUC (asset) {
+  
+
+  var res = "https://api.kucoin.com//api/v1/market/allTickers";
+  var url = res + asset
+  
+  var urlFetch = UrlFetchApp.fetch(url);
+                              
+  var content = urlFetch.getContentText();
+  
+  var json = JSON.parse(content);
+  var base = json["result"]["Last"];
+  
+  return base;
+                  
+}
+
+
