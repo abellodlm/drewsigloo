@@ -1,0 +1,123 @@
+service: flr-slack-bot
+
+frameworkVersion: '3'
+
+provider:
+  name: aws
+  runtime: python3.9
+  stage: ${opt:stage, 'dev'}
+  region: ${opt:region, 'us-east-1'}
+  timeout: 900  # 15 minutes timeout for report generation
+  memorySize: 3008  # Max memory for better performance
+  architecture: x86_64  # Use x86_64 for better pandas compatibility
+  
+  environment:
+    S3_BUCKET_NAME: ${self:custom.bucketName}
+    STAGE: ${self:provider.stage}
+  
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action:
+            - s3:PutObject
+            - s3:GetObject
+            - s3:DeleteObject
+          Resource: "arn:aws:s3:::${self:custom.bucketName}/*"
+        - Effect: Allow
+          Action:
+            - s3:ListBucket
+          Resource: "arn:aws:s3:::${self:custom.bucketName}"
+
+custom:
+  bucketName: flr-reports-${self:provider.stage}-${aws:accountId}
+  pythonRequirements:
+    dockerizePip: true
+    dockerImage: public.ecr.aws/lambda/python:3.9
+    slim: true
+    strip: false
+    useStaticCache: false
+    useDownloadCache: false
+    pipCmdExtraArgs:
+      - --no-cache-dir
+      - --compile
+    layer:
+      name: ${self:service}-${self:provider.stage}-python-requirements
+      description: Python requirements layer for ${self:service}
+      compatibleRuntimes:
+        - python3.9
+      compatibleArchitectures:
+        - x86_64
+
+functions:
+  slackBot:
+    handler: handler.lambda_handler
+    events:
+      - http:
+          path: /slack/flr-report
+          method: post
+          cors: true
+    environment:
+      S3_BUCKET_NAME: ${self:custom.bucketName}
+    layers:
+      - { Ref: PythonRequirementsLambdaLayer }
+    package:
+      patterns:
+        - '!**'
+        - 'handler.py'
+        - 'scripts/**'
+
+resources:
+  Resources:
+    # S3 Bucket for storing PDF reports
+    ReportsBucket:
+      Type: AWS::S3::Bucket
+      Properties:
+        BucketName: ${self:custom.bucketName}
+        PublicAccessBlockConfiguration:
+          BlockPublicAcls: true
+          BlockPublicPolicy: true
+          IgnorePublicAcls: true
+          RestrictPublicBuckets: true
+        VersioningConfiguration:
+          Status: Enabled
+        LifecycleConfiguration:
+          Rules:
+            - Id: DeleteReportsAfter7Days
+              Status: Enabled
+              ExpirationInDays: 7
+              NoncurrentVersionExpirationInDays: 1
+
+    # Lambda execution role (automatically created by serverless)
+    # Additional permissions are defined in provider.iam.role.statements
+
+  Outputs:
+    SlackWebhookUrl:
+      Description: "Slack webhook URL for /flr-report command"
+      Value:
+        Fn::Join:
+          - ""
+          - - "https://"
+            - Ref: ApiGatewayRestApi
+            - ".execute-api."
+            - ${self:provider.region}
+            - ".amazonaws.com/"
+            - ${self:provider.stage}
+            - "/slack/flr-report"
+      Export:
+        Name: ${self:service}-${self:provider.stage}-webhook-url
+
+plugins:
+  - serverless-python-requirements
+
+# Package configuration
+package:
+  patterns:
+    - '!CMCFLR/**'  # Exclude original folder
+    - '!.git/**'
+    - '!.env'
+    - '!*.md'
+    - '!tests/**'
+    - 'scripts/**'
+    - 'handler.py'
+    - 'requirements.txt'

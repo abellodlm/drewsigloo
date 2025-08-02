@@ -1,0 +1,10 @@
+# Alternative lightweight requirements if Lambda layers don't work
+# Use this file if you want to exclude pandas and do basic CSV processing
+
+fpdf==1.7.2
+requests==2.31.0
+urllib3==2.0.7
+boto3==1.34.0
+
+# For CSV processing without pandas (fallback option)
+# No additional packages needed - use built-in csv module

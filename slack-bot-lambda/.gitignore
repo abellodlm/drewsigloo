@@ -1,0 +1,6 @@
+.env
+node_modules/
+*.zip
+.serverless/
+aws/
+awscliv2.zip
