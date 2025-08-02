@@ -4,7 +4,7 @@ frameworkVersion: '3'
 
 provider:
   name: aws
-  runtime: python3.9
+  runtime: python3.11
   stage: ${opt:stage, 'dev'}
   region: ${opt:region, 'us-east-1'}
   timeout: 900  # 15 minutes timeout for report generation
@@ -31,23 +31,6 @@ provider:
 
 custom:
   bucketName: flr-reports-${self:provider.stage}-${aws:accountId}
-  pythonRequirements:
-    dockerizePip: true
-    dockerImage: public.ecr.aws/lambda/python:3.9
-    slim: true
-    strip: false
-    useStaticCache: false
-    useDownloadCache: false
-    pipCmdExtraArgs:
-      - --no-cache-dir
-      - --compile
-    layer:
-      name: ${self:service}-${self:provider.stage}-python-requirements
-      description: Python requirements layer for ${self:service}
-      compatibleRuntimes:
-        - python3.9
-      compatibleArchitectures:
-        - x86_64
 
 functions:
   slackBot:
@@ -59,13 +42,12 @@ functions:
           cors: true
     environment:
       S3_BUCKET_NAME: ${self:custom.bucketName}
-    layers:
-      - { Ref: PythonRequirementsLambdaLayer }
     package:
       patterns:
         - '!**'
         - 'handler.py'
         - 'scripts/**'
+        - 'requirements-simple.txt'
 
 resources:
   Resources:
@@ -107,8 +89,8 @@ resources:
       Export:
         Name: ${self:service}-${self:provider.stage}-webhook-url
 
-plugins:
-  - serverless-python-requirements
+# plugins:
+#   - serverless-python-requirements
 
 # Package configuration
 package:

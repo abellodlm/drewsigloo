@@ -1,0 +1,11 @@
+# Heavy dependencies - will be packaged in Lambda layer
+pandas==2.0.3
+numpy==1.24.3
+
+# Lightweight dependencies
+fpdf==1.7.2
+requests==2.31.0
+urllib3==2.0.7
+
+# AWS SDK (available in Lambda runtime, but pinning version for consistency)
+boto3==1.34.0
