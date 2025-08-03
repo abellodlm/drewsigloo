@@ -270,7 +270,7 @@ def fetch_talos_data(order_ids, cutoff_hour):
         all_data = []
         method = "GET"
         path = "/v1/trade-analytics"
-        limit = 500
+        limit = 200  # Reduced batch size for cost optimization
         
         for order_id in order_ids:
             print(f"Fetching data for Order ID: {order_id}")
@@ -352,7 +352,7 @@ def combine_and_calculate(execution_data, market_data, cutoff_hour):
     analytics_data = []
     sorted_dates = sorted(daily.keys())
     
-    # Limit to most recent 30 days for performance
+    # Limit to most recent 30 days for cost optimization
     if len(sorted_dates) > 30:
         sorted_dates = sorted_dates[-30:]
     

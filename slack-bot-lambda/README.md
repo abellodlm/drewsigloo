@@ -119,12 +119,64 @@ serverless logs -f slackBot
 serverless remove
 ```
 
-## Cost Optimization
+## Cost Analysis & Optimization
 
-- Lambda only charges for execution time
-- S3 stores reports temporarily (7-day auto-cleanup)
-- API Gateway charges per request
-- Estimated cost: $0.01-0.05 per report
+### Detailed Cost Breakdown (per report)
+
+**Lambda Function:**
+- Memory: 1024 MB (optimized from 3008 MB)
+- Timeout: 5 minutes (optimized from 15 minutes)  
+- Architecture: ARM64 (20% cheaper than x86_64)
+- Typical execution: 1-3 minutes
+- Cost: ~$0.002-0.006 per report
+
+**API Gateway:**
+- 1 REST API request per report
+- Cost: ~$0.0000035 per report
+
+**S3 Storage:**
+- PDF storage (~500KB-2MB per file)
+- 24-hour presigned URL expiry
+- Cost: ~$0.0001 per report
+
+**External APIs:**
+- CoinGecko API: Free tier (10,000 calls/month)
+- Talos API: Existing subscription
+
+**Total Estimated Cost: $0.002-0.007 per report**
+
+### Cost Optimizations Applied
+
+1. **Memory reduced** from 3008MB to 1024MB (-67% cost reduction)
+2. **Timeout reduced** from 15min to 5min (-67% cost reduction)
+3. **ARM64 architecture** for 20% cost savings
+4. **Data processing limited** to recent 30 days
+5. **Batch size optimized** to 200 records per API call
+6. **Asynchronous processing** to avoid Slack timeout charges
+
+### ⚠️ Monitoring Recommendations
+
+**First execution monitoring**: The configuration has been optimized for cost. Monitor CloudWatch logs for:
+
+1. **Memory usage**: Reduced from 3008MB to 1024MB
+   - Watch for "Runtime.OutOfMemory" errors
+   - If needed, increase to 1536MB or 2048MB
+
+2. **Execution time**: Reduced timeout from 15min to 5min
+   - Monitor actual execution times in logs
+   - If timeouts occur, increase to 7-10 minutes
+
+3. **ARM64 compatibility**: Changed from x86_64
+   - Most Python packages work fine on ARM64
+   - Check for any architecture-specific issues
+
+**Adjustment commands if needed:**
+```yaml
+# In serverless.yml
+memorySize: 1536    # Increase if memory errors
+timeout: 420        # 7 minutes if timeout errors
+architecture: x86_64 # Revert if ARM64 issues
+```
 
 ## Security
 

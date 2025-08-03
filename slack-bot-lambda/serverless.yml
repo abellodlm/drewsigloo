@@ -7,9 +7,9 @@ provider:
   runtime: python3.11
   stage: ${opt:stage, 'dev'}
   region: ${opt:region, 'us-east-1'}
-  timeout: 900  # 15 minutes timeout for report generation
-  memorySize: 3008  # Max memory for better performance
-  architecture: x86_64  # Use x86_64 for better pandas compatibility
+  timeout: 300  # 5 minutes timeout - optimized for cost
+  memorySize: 1024  # Reasonable memory allocation  
+  architecture: arm64  # ARM64 is 20% cheaper than x86_64
   
   environment:
     S3_BUCKET_NAME: ${self:custom.bucketName}
