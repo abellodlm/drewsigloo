@@ -112,8 +112,8 @@ def handle_async_processing(event):
         print(f"Async processing started for order IDs: {order_ids}")
         
         # Generate the complete report with all records
-        pdf_content = generate_flr_report(order_ids)
-        print("PDF generated successfully")
+        pdf_content, total_flr_units = generate_flr_report(order_ids)
+        print(f"PDF generated successfully. Total FLR units: {total_flr_units:,.2f}")
         
         # Upload PDF (try Slack first, fallback to S3)
         filename = f"flr-report-{'-'.join(order_ids[:3])}.pdf"
@@ -127,14 +127,14 @@ def handle_async_processing(event):
                 if 's3.amazonaws.com' in file_url:
                     # S3 fallback was used
                     send_follow_up_message(response_url, {
-                        'text': f'✅ **FLR Report Complete!**\nOrder IDs: {", ".join(order_ids)}\nDownload: {file_url}',
-                        'response_type': 'in_channel'
+                        'text': f'✅ **FLR Report Complete!**\nOrder IDs: {", ".join(order_ids)}\nTotal FLR Units: {total_flr_units:,.2f}\nDownload: {file_url}',
+                        'response_type': 'ephemeral'
                     })
                 else:
                     # Slack upload succeeded
                     send_follow_up_message(response_url, {
-                        'text': f'✅ **FLR Report Complete!**\nOrder IDs: {", ".join(order_ids)}\nReport has been uploaded to this channel',
-                        'response_type': 'in_channel'
+                        'text': f'✅ **FLR Report Complete!**\nOrder IDs: {", ".join(order_ids)}\nTotal FLR Units: {total_flr_units:,.2f}\nReport has been uploaded to this channel',
+                        'response_type': 'ephemeral'
                     })
                 print("Follow-up message sent successfully")
                 
@@ -144,7 +144,7 @@ def handle_async_processing(event):
             if response_url:
                 send_follow_up_message(response_url, {
                     'text': f'❌ Report generated but upload failed. Please contact support.\nOrder IDs: {", ".join(order_ids)}',
-                    'response_type': 'in_channel'
+                    'response_type': 'ephemeral'
                 })
         
         return {'statusCode': 200, 'body': 'Async processing completed'}
@@ -155,7 +155,7 @@ def handle_async_processing(event):
         if response_url:
             send_follow_up_message(response_url, {
                 'text': f'❌ Error generating report: {str(e)}',
-                'response_type': 'in_channel'
+                'response_type': 'ephemeral'
             })
         return {'statusCode': 500, 'body': f'Async processing failed: {str(e)}'}
 
@@ -200,7 +200,7 @@ def generate_flr_report(order_ids, cutoff_hour=24):
     print(f"Processing real data for order IDs: {order_ids}")
     
     # Get real data from Talos and CoinGecko
-    analytics_data = process_real_flr_data(order_ids, cutoff_hour)
+    analytics_data, total_flr_units = process_real_flr_data(order_ids, cutoff_hour)
     
     pdf = PDF(cutoff_hour=cutoff_hour, orientation='L', unit='mm', format='A3')
     pdf.add_page()
@@ -211,7 +211,7 @@ def generate_flr_report(order_ids, cutoff_hour=24):
     pdf_bytes = pdf.output(dest='S')
     if isinstance(pdf_bytes, str):
         pdf_bytes = pdf_bytes.encode('latin-1')
-    return pdf_bytes
+    return pdf_bytes, total_flr_units
 
 def process_real_flr_data(order_ids, cutoff_hour):
     """Process real Talos execution data and CoinGecko market data"""
@@ -231,11 +231,15 @@ def process_real_flr_data(order_ids, cutoff_hour):
     execution_data = fetch_talos_data(order_ids, cutoff_hour)
     print(f"Talos execution data retrieved: {len(execution_data)} records")
     
+    # Calculate total FLR units from execution data
+    total_flr_units = sum(float(row.get("Quantity", 0)) for row in execution_data)
+    print(f"Total FLR units across all orders: {total_flr_units:,.2f}")
+    
     # Process and combine data
     print("Combining and calculating metrics...")
     result = combine_and_calculate(execution_data, coingecko_data, cutoff_hour)
     print(f"Final result: {len(result)} analytics rows")
-    return result
+    return result, total_flr_units
 
 def fetch_coingecko_data():
     """Fetch FLR market data from CoinGecko"""
