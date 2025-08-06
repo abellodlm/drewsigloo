@@ -454,13 +454,7 @@ def upload_pdf_to_slack(pdf_content, filename, channel_id):
     except Exception as e:
         print(f"New API method failed: {e}")
     
-    # Method 2: Try legacy files.upload (might still work for some tokens)
-    try:
-        return upload_via_legacy_api(pdf_content, filename, channel_id, bot_token)
-    except Exception as e:
-        print(f"Legacy API method failed: {e}")
-    
-    # Method 3: Fallback to S3 upload with Slack message
+    # Method 2: Fallback to S3 upload with Slack message
     try:
         print("Falling back to S3 upload with Slack notification")
         s3_url = upload_pdf_to_s3(pdf_content, filename)
@@ -599,44 +593,6 @@ def upload_via_new_api(pdf_content, filename, channel_id, bot_token):
     else:
         raise Exception(f"Failed to complete upload: {complete_data.get('error')}")
 
-def upload_via_legacy_api(pdf_content, filename, channel_id, bot_token):
-    """
-    Try the legacy files.upload API (may still work for some tokens)
-    """
-    print("Trying legacy files.upload API...")
-    
-    files = {
-        'file': (filename, pdf_content, 'application/pdf')
-    }
-    
-    data = {
-        'channels': channel_id,
-        'filename': filename,
-        'filetype': 'pdf',
-        'title': f'FLR Report - {filename}',
-        'initial_comment': 'Your FLR report is ready!'
-    }
-    
-    headers = {
-        'Authorization': f'Bearer {bot_token}'
-    }
-    
-    response = requests.post(
-        'https://slack.com/api/files.upload',
-        files=files,
-        data=data,
-        headers=headers,
-        timeout=30
-    )
-    
-    response_data = response.json()
-    print(f"Legacy upload response: {response_data}")
-    
-    if response.status_code == 200 and response_data.get('ok'):
-        return response_data['file']['permalink']
-    else:
-        error_msg = response_data.get('error', 'Unknown error')
-        raise Exception(f"Legacy API error: {error_msg}")
 
 # For local testing
 if __name__ == "__main__":
