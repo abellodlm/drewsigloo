@@ -89,8 +89,8 @@ resources:
       Export:
         Name: ${self:service}-${self:provider.stage}-webhook-url
 
-# plugins:
-#   - serverless-python-requirements
+plugins:
+  - serverless-python-requirements
 
 # Package configuration
 package:
