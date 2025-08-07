@@ -1,6 +1,0 @@
-{
-  "async_processing": true,
-  "order_ids": ["test-order-id"],
-  "channel_id": "C123456789",
-  "response_url": "https://hooks.slack.com/test"
-}
