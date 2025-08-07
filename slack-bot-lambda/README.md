@@ -1,22 +1,35 @@
-# FLR Slack Bot
+# Trading Desk Slack Bot
 
-A serverless Slack bot that generates FLR (Flare) trading reports using AWS Lambda.
+A comprehensive serverless Slack bot that generates trading reports using AWS Lambda.
 
-## Features
+## Services
 
-- Slack slash command `/flr-report` to generate PDF reports
+### 1. FLR Report Service (`/flr-report`)
 - Processes multiple order IDs: `/flr-report orderid1,orderid2,orderid3`
 - Generates comprehensive PDF reports with:
   - Daily trading summaries
   - 30-day volume analysis
   - Sell pressure calculations
 - Automatic PDF upload to S3 with secure download links
-- Auto-cleanup: Reports expire after 7 days
+
+### 2. P&L Report Service (`/pnl-report`)
+- Weekly P&L analysis: `/pnl-report last`
+- Complete WeeklyDeskPnL integration with:
+  - YTD, MTD, and weekly P&L calculations
+  - Week-over-week change analysis
+  - 8 interactive charts (cumulative, weekly bars, rankings, pie charts)
+  - Professional landscape PDF reports with gradient background
+  - Google Sheets data extraction (2000+ records)
+  - Direct Slack file upload with S3 fallback
 
 ## Architecture
 
 ```
-Slack → API Gateway → Lambda → Scripts → S3 → PDF Download Link
+Slack → API Gateway → Lambda Functions → External APIs → S3 → PDF Reports
+
+Services:
+- FLR Service: handler.py (lightweight)
+- P&L Service: pnl_handler.py (containerized with heavy dependencies)
 ```
 
 ## Setup
@@ -80,16 +93,40 @@ serverless deploy
 # Update serverless.yml to use ECR image instead
 ```
 
-### 5. Configure Slack
+### 5. Deploy P&L Service (Containerized)
+
+The P&L service uses Docker containers for heavy dependencies:
+
+```bash
+# Deploy P&L service with container
+serverless deploy -c pnl_serverless.yml
+
+# Monitor deployment
+serverless logs -f pnlBotV2 -c pnl_serverless.yml
+```
+
+**P&L Prerequisites:**
+- Google Sheets API credentials stored in AWS SSM
+- Required SSM parameters:
+  - `/pnl-bot/GOOGLE_SERVICE_ACCOUNT_EMAIL`
+  - `/pnl-bot/GOOGLE_PRIVATE_KEY`
+  - `/pnl-bot/GOOGLE_PROJECT_ID`
+  - `/pnl-bot/GOOGLE_SHEET_ID`
+
+### 6. Configure Slack
 
 1. Go to https://api.slack.com/apps
 2. Create a new Slack app
-3. Go to "Slash Commands" and create `/flr-report`
-4. Set the Request URL to the webhook URL from deployment output
-5. Install the app to your workspace
+3. Go to "Slash Commands" and create:
+   - `/flr-report` → FLR service webhook URL
+   - `/pnl-report` → P&L service webhook URL
+4. Set the Request URLs to the webhook URLs from deployment output
+5. Add required bot scopes: `files:write`, `chat:write`
+6. Install the app to your workspace
 
 ## Usage
 
+### FLR Reports
 In Slack, use the command:
 ```
 /flr-report 87526ab1-e9a2-4d6e-920f-ab05c399ea9a
@@ -100,6 +137,13 @@ Or multiple orders:
 /flr-report orderid1,orderid2,orderid3
 ```
 
+### P&L Reports
+In Slack, use the command:
+```
+/pnl-report last    # Generate weekly P&L report
+/pnl-report help    # Show help information
+```
+
 ## Local Testing
 
 ```bash
@@ -108,8 +152,9 @@ python handler.py
 
 ## Deployment Commands
 
+### FLR Service
 ```bash
-# Deploy
+# Deploy FLR service
 serverless deploy
 
 # View logs
@@ -117,6 +162,18 @@ serverless logs -f slackBot
 
 # Remove deployment
 serverless remove
+```
+
+### P&L Service
+```bash
+# Deploy P&L service (containerized)
+serverless deploy -c pnl_serverless.yml
+
+# View logs
+serverless logs -f pnlBotV2 -c pnl_serverless.yml
+
+# Remove P&L deployment
+serverless remove -c pnl_serverless.yml
 ```
 
 ## Cost Analysis & Optimization
