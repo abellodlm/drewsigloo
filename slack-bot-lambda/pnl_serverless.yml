@@ -1,0 +1,106 @@
+service: pnl-slack-bot
+
+frameworkVersion: '3'
+
+provider:
+  name: aws
+  runtime: python3.11
+  stage: ${opt:stage, 'dev'}
+  region: ${opt:region, 'us-east-1'}
+  timeout: 29  # Max for API Gateway
+  memorySize: 2048  # Increase memory for chart generation
+  architecture: x86_64
+  
+  # Use container packaging for heavy dependencies
+  ecr:
+    images:
+      pnl-image:
+        path: ./
+        file: Dockerfile
+  
+  environment:
+    S3_BUCKET_NAME: ${self:custom.bucketName}
+    STAGE: ${self:provider.stage}
+    SLACK_BOT_TOKEN: ${ssm:/slack-bot/SLACK_BOT_TOKEN}
+    SLACK_SIGNING_SECRET: ${ssm:/slack-bot/SLACK_SIGNING_SECRET}
+    GOOGLE_SERVICE_ACCOUNT_EMAIL: ${ssm:/pnl-bot/GOOGLE_SERVICE_ACCOUNT_EMAIL}
+    GOOGLE_PRIVATE_KEY: ${ssm:/pnl-bot/GOOGLE_PRIVATE_KEY}
+    GOOGLE_PROJECT_ID: ${ssm:/pnl-bot/GOOGLE_PROJECT_ID}
+    GOOGLE_PRIVATE_KEY_ID: ${ssm:/pnl-bot/GOOGLE_PRIVATE_KEY_ID}
+    GOOGLE_CLIENT_ID: ${ssm:/pnl-bot/GOOGLE_CLIENT_ID}
+    GOOGLE_SHEET_ID: ${ssm:/pnl-bot/GOOGLE_SHEET_ID}
+  
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action:
+            - s3:PutObject
+            - s3:GetObject
+            - s3:DeleteObject
+          Resource: "arn:aws:s3:::${self:custom.bucketName}/*"
+        - Effect: Allow
+          Action:
+            - s3:ListBucket
+          Resource: "arn:aws:s3:::${self:custom.bucketName}"
+        - Effect: Allow
+          Action:
+            - ssm:GetParameters
+            - ssm:GetParametersByPath
+            - ssm:GetParameter
+          Resource: 
+            - "arn:aws:ssm:${self:provider.region}:*:parameter/slack-bot*"
+            - "arn:aws:ssm:${self:provider.region}:*:parameter/pnl-bot*"
+        - Effect: Allow
+          Action:
+            - lambda:InvokeFunction
+          Resource: 
+            - "arn:aws:lambda:${self:provider.region}:*:function:${self:service}-${self:provider.stage}-*"
+            - "arn:aws:lambda:${self:provider.region}:*:function:pnl-slack-bot-dev-pnlBotV2"
+
+custom:
+  bucketName: pnl-reports-${self:provider.stage}-${aws:accountId}
+
+functions:
+  pnlBotV2:
+    image:
+      name: pnl-image
+    events:
+      - http:
+          path: /slack/pnl-report
+          method: post
+          cors: true
+    environment:
+      S3_BUCKET_NAME: ${self:custom.bucketName}
+
+resources:
+  Resources:
+    PnlReportsBucket:
+      Type: AWS::S3::Bucket
+      Properties:
+        BucketName: ${self:custom.bucketName}
+        PublicAccessBlockConfiguration:
+          BlockPublicAcls: true
+          BlockPublicPolicy: true
+          IgnorePublicAcls: true
+          RestrictPublicBuckets: true
+        
+  Outputs:
+    PnlWebhookUrl:
+      Description: "Slack webhook URL for /pnl-report command"
+      Value:
+        Fn::Join:
+          - ""
+          - - "https://"
+            - Ref: ApiGatewayRestApi
+            - ".execute-api."
+            - ${self:provider.region}
+            - ".amazonaws.com/"
+            - ${self:provider.stage}
+            - "/slack/pnl-report"
+      Export:
+        Name: ${self:service}-${self:provider.stage}-webhook-url
+
+# Plugins commented out since using Docker containers
+# plugins:
+#   - serverless-python-requirements
