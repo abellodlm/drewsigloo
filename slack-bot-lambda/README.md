@@ -178,61 +178,73 @@ serverless remove -c pnl_serverless.yml
 
 ## Cost Analysis & Optimization
 
-### Detailed Cost Breakdown (per report)
-
+### FLR Service Cost (per report)
 **Lambda Function:**
-- Memory: 1024 MB (optimized from 3008 MB)
-- Timeout: 5 minutes (optimized from 15 minutes)  
+- Memory: 1024 MB 
+- Timeout: 5 minutes
 - Architecture: ARM64 (20% cheaper than x86_64)
 - Typical execution: 1-3 minutes
 - Cost: ~$0.002-0.006 per report
 
-**API Gateway:**
-- 1 REST API request per report
-- Cost: ~$0.0000035 per report
+### P&L Service Cost (per report)
+**Lambda Function (Containerized):**
+- Memory: 2048 MB (required for chart generation)
+- Timeout: 29 seconds (API Gateway limit)
+- Architecture: x86_64 (container compatibility)
+- Actual execution: ~12 seconds
+- Cost: ~$0.008-0.012 per report
 
-**S3 Storage:**
-- PDF storage (~500KB-2MB per file)
-- 24-hour presigned URL expiry
-- Cost: ~$0.0001 per report
+**Container Storage (ECR):**
+- Container image: ~2GB with heavy dependencies
+- Cost: ~$0.20 per month (regardless of usage)
 
-**External APIs:**
-- CoinGecko API: Free tier (10,000 calls/month)
-- Talos API: Existing subscription
+**Additional Services:**
+- **API Gateway:** 1 REST API request (~$0.0000035)
+- **S3 Storage:** PDF storage 2-3MB (~$0.0001)
+- **Google Sheets API:** Free tier (100 requests/100 seconds)
 
-**Total Estimated Cost: $0.002-0.007 per report**
+**Total Estimated Costs:**
+- **FLR Report:** $0.002-0.007 per report
+- **P&L Report:** $0.008-0.013 per report + $0.20/month container storage
 
 ### Cost Optimizations Applied
 
-1. **Memory reduced** from 3008MB to 1024MB (-67% cost reduction)
-2. **Timeout reduced** from 15min to 5min (-67% cost reduction)
-3. **ARM64 architecture** for 20% cost savings
+**FLR Service:**
+1. **ARM64 architecture** for 20% cost savings
+2. **Optimized memory** at 1024MB for lightweight processing
+3. **Batch size optimized** to 200 records per API call
 4. **Data processing limited** to recent 30 days
-5. **Batch size optimized** to 200 records per API call
-6. **Asynchronous processing** to avoid Slack timeout charges
+
+**P&L Service:**
+1. **Container deployment** for heavy dependencies efficiency
+2. **Asynchronous processing** to avoid API Gateway timeout charges
+3. **29-second timeout** (API Gateway maximum)
+4. **Chart cleanup** removes temporary files immediately
+5. **Single container image** serves multiple chart generation needs
 
 ### ⚠️ Monitoring Recommendations
 
-**First execution monitoring**: The configuration has been optimized for cost. Monitor CloudWatch logs for:
+**P&L Service (Recently Deployed):**
+- **Actual performance:** 12 seconds execution, 311MB peak memory
+- **Container cold start:** ~3.8 seconds initial overhead
+- **Memory usage:** Well within 2048MB limit
+- **No optimization needed** - service performs efficiently
 
-1. **Memory usage**: Reduced from 3008MB to 1024MB
-   - Watch for "Runtime.OutOfMemory" errors
-   - If needed, increase to 1536MB or 2048MB
+**FLR Service:**
+- Monitor for memory errors if processing large datasets
+- Current 1024MB should be sufficient for most workloads
 
-2. **Execution time**: Reduced timeout from 15min to 5min
-   - Monitor actual execution times in logs
-   - If timeouts occur, increase to 7-10 minutes
-
-3. **ARM64 compatibility**: Changed from x86_64
-   - Most Python packages work fine on ARM64
-   - Check for any architecture-specific issues
-
-**Adjustment commands if needed:**
+**Current Configurations:**
 ```yaml
-# In serverless.yml
-memorySize: 1536    # Increase if memory errors
-timeout: 420        # 7 minutes if timeout errors
-architecture: x86_64 # Revert if ARM64 issues
+# FLR Service (serverless.yml)
+memorySize: 1024
+timeout: 300
+architecture: arm64
+
+# P&L Service (pnl_serverless.yml) 
+memorySize: 2048
+timeout: 29
+architecture: x86_64
 ```
 
 ## Security
