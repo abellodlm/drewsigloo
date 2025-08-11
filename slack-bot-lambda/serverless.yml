@@ -70,7 +70,7 @@ functions:
       patterns:
         - '!**'
         - 'handler.py'
-        - 'requirements-simple.txt'
+        - 'requirements-minimal.txt'
 
 resources:
   Outputs:

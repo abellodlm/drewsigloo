@@ -6,6 +6,30 @@ import requests
 from urllib.parse import parse_qs
 from datetime import datetime, timezone, timedelta
 import tempfile
+import hmac
+import hashlib
+from collections import defaultdict
+from fpdf import FPDF
+
+# Cache environment variables at module level for better performance
+CONFIG = {
+    'COINGECKO_API_KEY': os.environ.get('COINGECKO_API_KEY'),
+    'API_KEY': os.environ.get('API_KEY'),
+    'API_SECRET': os.environ.get('API_SECRET'),
+    'API_HOST': os.environ.get('API_HOST'),
+    'SLACK_BOT_TOKEN': os.environ.get('SLACK_BOT_TOKEN'),
+    'S3_BUCKET_NAME': os.environ.get('S3_BUCKET_NAME', 'flr-reports-bucket')
+}
+
+# Create reusable AWS clients to avoid recreating them
+S3_CLIENT = boto3.client('s3')
+LAMBDA_CLIENT = boto3.client('lambda')
+
+# Connection pooling for requests - reuse connections for better performance
+SESSION = requests.Session()
+adapter = requests.adapters.HTTPAdapter(pool_maxsize=10, pool_connections=10)
+SESSION.mount('https://', adapter)
+SESSION.mount('http://', adapter)
 
 def lambda_handler(event, context):
     """
@@ -66,7 +90,6 @@ def lambda_handler(event, context):
                 print(f"Starting async processing for order IDs: {order_ids}")
                 
                 # Invoke this same Lambda function asynchronously for background processing
-                lambda_client = boto3.client('lambda')
                 async_payload = {
                     'async_processing': True,
                     'order_ids': order_ids,
@@ -74,7 +97,7 @@ def lambda_handler(event, context):
                     'response_url': response_url
                 }
                 
-                lambda_client.invoke(
+                LAMBDA_CLIENT.invoke(
                     FunctionName=context.function_name,
                     InvocationType='Event',  # Asynchronous invocation
                     Payload=json.dumps(async_payload)
@@ -161,9 +184,6 @@ def handle_async_processing(event):
 
 def generate_flr_report(order_ids, cutoff_hour=24):
     """Generate FLR report with real Talos and CoinGecko data"""
-    from fpdf import FPDF
-    import tempfile
-    import os
     
     class PDF(FPDF):
         def __init__(self, cutoff_hour, *args, **kwargs):
@@ -215,9 +235,6 @@ def generate_flr_report(order_ids, cutoff_hour=24):
 
 def process_real_flr_data(order_ids, cutoff_hour):
     """Process real Talos execution data and CoinGecko market data"""
-    import requests
-    from datetime import datetime, timezone, timedelta
-    from collections import defaultdict
     
     print(f"Starting real data processing for {len(order_ids)} order IDs")
     
@@ -243,11 +260,11 @@ def process_real_flr_data(order_ids, cutoff_hour):
 
 def fetch_coingecko_data():
     """Fetch FLR market data from CoinGecko"""
-    api_key = os.environ.get('COINGECKO_API_KEY')
+    api_key = CONFIG['COINGECKO_API_KEY']
     url = "https://api.coingecko.com/api/v3/coins/flare-networks/market_chart?vs_currency=usd&days=90&interval=daily"
     headers = {"accept": "application/json", "x-cg-demo-api-key": api_key}
     
-    response = requests.get(url, headers=headers, timeout=10)
+    response = SESSION.get(url, headers=headers, timeout=10)
     response.raise_for_status()
     data = response.json()
     
@@ -262,14 +279,13 @@ def fetch_coingecko_data():
 
 def fetch_talos_data(order_ids, cutoff_hour):
     """Fetch execution data from Talos API with proper pagination"""
-    import hmac, hashlib, base64
     
     try:
-        api_key = os.environ.get('API_KEY')
-        api_secret = os.environ.get('API_SECRET')  
-        host = os.environ.get('API_HOST')
+        api_key = CONFIG['API_KEY']
+        api_secret = CONFIG['API_SECRET']
+        host = CONFIG['API_HOST']
         
-        print(f"Talos API config - Host: {host}, API Key: {api_key[:8]}...")
+        print(f"Talos API config - Host: {host}, API Key: {api_key[:8] if api_key else 'None'}...")
         
         all_data = []
         method = "GET"
@@ -298,7 +314,7 @@ def fetch_talos_data(order_ids, cutoff_hour):
                     
                     # Make API request
                     print(f"  Making request: https://{host}{path}?{query}")
-                    response = requests.get(f"https://{host}{path}?{query}", headers=headers, timeout=15)
+                    response = SESSION.get(f"https://{host}{path}?{query}", headers=headers, timeout=15)
                     print(f"  Batch {batch} - Status: {response.status_code}")
                     
                     if response.status_code != 200:
@@ -334,8 +350,6 @@ def fetch_talos_data(order_ids, cutoff_hour):
 
 def combine_and_calculate(execution_data, market_data, cutoff_hour):
     """Combine execution and market data to calculate final metrics"""
-    from collections import defaultdict
-    from datetime import datetime, timezone, timedelta
     
     daily = defaultdict(lambda: {"quantity_sum": 0.0})
     
@@ -363,12 +377,12 @@ def combine_and_calculate(execution_data, market_data, cutoff_hour):
     for date in sorted_dates:
         quantity = daily[date]["quantity_sum"]
         
-        # Calculate 30-day volume sum (optimized)
+        # Calculate 30-day volume sum (optimized with date range filtering)
         volume_30d = 0
         start_date = date - timedelta(days=29)  # 30 days including today
-        for check_date in market_data:
-            if start_date <= check_date <= date:
-                volume_30d += market_data[check_date]['volume_flr']
+        # Pre-filter market data to only relevant dates to avoid O(n²) complexity
+        relevant_dates = [d for d in market_data if start_date <= d <= date]
+        volume_30d = sum(market_data[check_date]['volume_flr'] for check_date in relevant_dates)
         
         avg_daily_sell = volume_30d / 30 if volume_30d else 0
         sell_pressure = quantity / avg_daily_sell if avg_daily_sell else 0
@@ -388,7 +402,7 @@ def upload_pdf_to_s3(pdf_content, filename):
     """
     Upload PDF to S3 and return public URL with proper binary handling
     """
-    bucket_name = os.environ.get('S3_BUCKET_NAME', 'flr-reports-bucket')
+    bucket_name = CONFIG['S3_BUCKET_NAME']
     
     # Ensure PDF content is bytes for S3 upload
     if isinstance(pdf_content, str):
@@ -398,10 +412,8 @@ def upload_pdf_to_s3(pdf_content, filename):
     print(f"S3 Upload - PDF content type: {type(pdf_content)}, length: {len(pdf_content)}")
     print(f"S3 Upload - PDF header check: {pdf_content.startswith(b'%PDF')}")
     
-    s3_client = boto3.client('s3')
-    
     try:
-        s3_client.put_object(
+        S3_CLIENT.put_object(
             Bucket=bucket_name,
             Key=f"reports/{filename}",
             Body=pdf_content,
@@ -410,7 +422,7 @@ def upload_pdf_to_s3(pdf_content, filename):
         )
         
         # Generate presigned URL (valid for 24 hours)
-        url = s3_client.generate_presigned_url(
+        url = S3_CLIENT.generate_presigned_url(
             'get_object',
             Params={'Bucket': bucket_name, 'Key': f"reports/{filename}"},
             ExpiresIn=86400  # 24 hours
@@ -430,7 +442,7 @@ def send_follow_up_message(response_url, message):
     """
     try:
         print(f"Sending POST to {response_url} with message: {message}")
-        response = requests.post(response_url, json=message, timeout=10)
+        response = SESSION.post(response_url, json=message, timeout=10)
         print(f"Response status: {response.status_code}, Response: {response.text}")
         response.raise_for_status()
         return True
@@ -442,7 +454,7 @@ def upload_pdf_to_slack(pdf_content, filename, channel_id):
     """
     Upload PDF to Slack with multiple fallback approaches
     """
-    bot_token = os.environ.get('SLACK_BOT_TOKEN')
+    bot_token = CONFIG['SLACK_BOT_TOKEN']
     if not bot_token:
         raise Exception("SLACK_BOT_TOKEN environment variable not set")
     
@@ -500,7 +512,7 @@ def upload_via_new_api(pdf_content, filename, channel_id, bot_token):
             'length': str(len(pdf_content))
         }
         
-        upload_url_response = requests.post(
+        upload_url_response = SESSION.post(
             'https://slack.com/api/files.getUploadURLExternal',
             headers=headers,
             data=data,
@@ -531,7 +543,7 @@ def upload_via_new_api(pdf_content, filename, channel_id, bot_token):
             'length': len(pdf_content)
         }
         
-        upload_url_response = requests.post(
+        upload_url_response = SESSION.post(
             'https://slack.com/api/files.getUploadURLExternal',
             headers=headers,
             json=payload,
@@ -551,7 +563,7 @@ def upload_via_new_api(pdf_content, filename, channel_id, bot_token):
     print("Step 2: Uploading file...")
     print(f"Upload URL: {upload_url}")
     
-    upload_response = requests.post(
+    upload_response = SESSION.post(
         upload_url,
         files={'file': (filename, pdf_content, 'application/pdf')},
         timeout=30
@@ -571,7 +583,7 @@ def upload_via_new_api(pdf_content, filename, channel_id, bot_token):
         'Content-Type': 'application/json'
     }
     
-    complete_response = requests.post(
+    complete_response = SESSION.post(
         'https://slack.com/api/files.completeUploadExternal',
         headers=headers,
         json={

@@ -7,10 +7,27 @@ from urllib.parse import parse_qs
 from datetime import datetime, timezone, timedelta
 import tempfile
 import pandas as pd
+import gc
 from utils.google_sheets import extract_pnl_data, save_pnl_export
 from utils.calculations import run_calculations
-from utils.chart_generator import generate_pnl_charts
+from utils.chart_generator import generate_pnl_charts, cleanup_chart_files
 from utils.pdf_builder import generate_pdf_report
+
+# Cache environment variables at module level for better performance
+CONFIG = {
+    'SLACK_BOT_TOKEN': os.environ.get('SLACK_BOT_TOKEN'),
+    'S3_BUCKET_NAME': os.environ.get('S3_BUCKET_NAME')
+}
+
+# Create reusable AWS clients to avoid recreating them
+S3_CLIENT = boto3.client('s3')
+LAMBDA_CLIENT = boto3.client('lambda')
+
+# Connection pooling for requests - reuse connections for better performance
+SESSION = requests.Session()
+adapter = requests.adapters.HTTPAdapter(pool_maxsize=10, pool_connections=10)
+SESSION.mount('https://', adapter)
+SESSION.mount('http://', adapter)
 
 def lambda_handler(event, context):
     """
@@ -75,7 +92,6 @@ def lambda_handler(event, context):
             
             # Start async processing
             try:
-                lambda_client = boto3.client('lambda')
                 async_payload = {
                     'async_processing': True,
                     'report_type': text,
@@ -84,7 +100,7 @@ def lambda_handler(event, context):
                     'response_url': response_url
                 }
                 
-                lambda_client.invoke(
+                LAMBDA_CLIENT.invoke(
                     FunctionName=context.function_name,
                     InvocationType='Event',
                     Payload=json.dumps(async_payload)
@@ -189,13 +205,38 @@ def handle_async_processing(event):
                 })
         finally:
             # Cleanup temporary files
-            try:
-                if csv_file_path and os.path.exists(csv_file_path):
-                    os.unlink(csv_file_path)
-                from utils.chart_generator import cleanup_chart_files
-                cleanup_chart_files(chart_paths)
-            except Exception as e:
-                print(f"Error cleaning up temporary files: {e}")
+            cleanup_files = []
+            
+            # Clean up CSV file
+            if csv_file_path and os.path.exists(csv_file_path):
+                cleanup_files.append(csv_file_path)
+            
+            # Clean up chart files (import already done at module level)
+            if 'chart_paths' in locals():
+                try:
+                    cleanup_chart_files(chart_paths)
+                except Exception as e:
+                    print(f"Error cleaning up chart files: {e}")
+            
+            # Clean up individual files
+            for file_path in cleanup_files:
+                try:
+                    os.unlink(file_path)
+                    print(f"Cleaned up file: {file_path}")
+                except Exception as e:
+                    print(f"Error cleaning up {file_path}: {e}")
+            
+            # Force cleanup of large objects to free memory
+            large_objects = ['pdf_content', 'df', 'metrics', 'chart_paths']
+            for obj_name in large_objects:
+                if obj_name in locals():
+                    try:
+                        del locals()[obj_name]
+                    except:
+                        pass
+            
+            # Force garbage collection
+            gc.collect()
         
         return {'statusCode': 200, 'body': 'Async processing completed'}
         
@@ -237,7 +278,7 @@ def upload_pdf_to_slack(pdf_content, filename, channel_id):
     """
     Upload PDF to Slack with multiple fallback approaches
     """
-    bot_token = os.environ.get('SLACK_BOT_TOKEN')
+    bot_token = CONFIG['SLACK_BOT_TOKEN']
     if not bot_token:
         raise Exception("SLACK_BOT_TOKEN environment variable not set")
     
@@ -295,7 +336,7 @@ def upload_via_new_api(pdf_content, filename, channel_id, bot_token):
             'length': str(len(pdf_content))
         }
         
-        upload_url_response = requests.post(
+        upload_url_response = SESSION.post(
             'https://slack.com/api/files.getUploadURLExternal',
             headers=headers,
             data=data,
@@ -326,7 +367,7 @@ def upload_via_new_api(pdf_content, filename, channel_id, bot_token):
             'length': len(pdf_content)
         }
         
-        upload_url_response = requests.post(
+        upload_url_response = SESSION.post(
             'https://slack.com/api/files.getUploadURLExternal',
             headers=headers,
             json=payload,
@@ -346,7 +387,7 @@ def upload_via_new_api(pdf_content, filename, channel_id, bot_token):
     print("Step 2: Uploading file...")
     print(f"Upload URL: {upload_url}")
     
-    upload_response = requests.post(
+    upload_response = SESSION.post(
         upload_url,
         files={'file': (filename, pdf_content, 'application/pdf')},
         timeout=30
@@ -366,7 +407,7 @@ def upload_via_new_api(pdf_content, filename, channel_id, bot_token):
         'Content-Type': 'application/json'
     }
     
-    complete_response = requests.post(
+    complete_response = SESSION.post(
         'https://slack.com/api/files.completeUploadExternal',
         headers=headers,
         json={
@@ -392,8 +433,7 @@ def upload_pdf_to_s3(pdf_content, filename):
     """
     Upload PDF to S3 and return presigned URL
     """
-    s3_client = boto3.client('s3')
-    bucket_name = os.environ.get('S3_BUCKET_NAME')
+    bucket_name = CONFIG['S3_BUCKET_NAME']
     
     if not bucket_name:
         raise Exception("S3_BUCKET_NAME environment variable not set")
@@ -401,7 +441,7 @@ def upload_pdf_to_s3(pdf_content, filename):
     try:
         # Upload to S3
         s3_key = f"pnl-reports/{filename}"
-        s3_client.put_object(
+        S3_CLIENT.put_object(
             Bucket=bucket_name,
             Key=s3_key,
             Body=pdf_content,
@@ -409,7 +449,7 @@ def upload_pdf_to_s3(pdf_content, filename):
         )
         
         # Generate presigned URL (24 hours)
-        url = s3_client.generate_presigned_url(
+        url = S3_CLIENT.generate_presigned_url(
             'get_object',
             Params={'Bucket': bucket_name, 'Key': s3_key},
             ExpiresIn=86400  # 24 hours
@@ -427,7 +467,7 @@ def send_follow_up_message(response_url, message):
     """
     try:
         print(f"Sending POST to {response_url} with message: {message}")
-        response = requests.post(response_url, json=message, timeout=10)
+        response = SESSION.post(response_url, json=message, timeout=10)
         print(f"Response status: {response.status_code}, Response: {response.text}")
         response.raise_for_status()
         return True
