@@ -1,0 +1,101 @@
+service: monitor-bot
+
+frameworkVersion: '3'
+
+provider:
+  name: aws
+  runtime: python3.11
+  stage: ${opt:stage, 'dev'}
+  region: ${opt:region, 'us-east-1'}
+  timeout: 30
+  memorySize: 512  # Lightweight service
+  architecture: arm64  # 20% cost savings
+  
+  environment:
+    STAGE: ${self:provider.stage}
+    SLACK_BOT_TOKEN: ${env:SLACK_BOT_TOKEN}
+    API_KEY: ${env:API_KEY}
+    API_SECRET: ${env:API_SECRET}
+    API_HOST: ${env:API_HOST}
+    SLACK_SIGNING_SECRET: ${env:SLACK_SIGNING_SECRET}
+    DYNAMODB_TABLE: ${self:custom.tableName}
+    ALLOWED_CHANNELS: ${env:ALLOWED_CHANNELS, ''}
+  
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action:
+            - dynamodb:PutItem
+            - dynamodb:GetItem
+            - dynamodb:UpdateItem
+            - dynamodb:DeleteItem
+            - dynamodb:Scan
+            - dynamodb:Query
+          Resource: 
+            - "arn:aws:dynamodb:${self:provider.region}:*:table/${self:custom.tableName}"
+        - Effect: Allow
+          Action:
+            - lambda:InvokeFunction
+          Resource: 
+            - "arn:aws:lambda:${self:provider.region}:*:function:${self:service}-${self:provider.stage}-*"
+
+custom:
+  tableName: monitor-bot-${self:provider.stage}
+
+functions:
+  monitorBot:
+    handler: monitor_handler.lambda_handler
+    environment:
+      COINGECKO_API_KEY: ${env:COINGECKO_API_KEY}
+      API_KEY: ${env:API_KEY}
+      API_SECRET: ${env:API_SECRET}
+      API_HOST: ${env:API_HOST}
+      SLACK_BOT_TOKEN: ${env:SLACK_BOT_TOKEN}
+      SLACK_SIGNING_SECRET: ${env:SLACK_SIGNING_SECRET}
+      DYNAMODB_TABLE: ${self:custom.tableName}
+      ALLOWED_CHANNELS: ${env:ALLOWED_CHANNELS, ''}
+    events:
+      - http:
+          path: /monitor
+          method: post
+          cors: true
+      # Note: Scheduled monitoring will be added later due to IAM permissions
+      # - schedule:
+      #     rate: rate(8 hours)
+      #     input:
+      #       scheduled_check: true
+
+plugins:
+  - serverless-python-requirements
+
+package:
+  patterns:
+    - '!node_modules/**'
+    - '!.git/**'
+    - '!.env*'
+    - '!*.md'
+    - '!assets/**'  # Monitor service doesn't need assets
+    - '!utils/**'   # Monitor service doesn't need chart/pdf utils
+    - '!pnl_*'      # Exclude P&L service files
+    - '!handler.py' # Exclude FLR handler
+    - '!Dockerfile' # Exclude Docker files
+
+resources:
+  Outputs:
+    MonitorWebhookUrl:
+      Description: "Monitor Bot Webhook URL"
+      Value:
+        Fn::Join:
+          - ""
+          - - "https://"
+            - Ref: "ApiGatewayRestApi"
+            - ".execute-api."
+            - ${self:provider.region}
+            - ".amazonaws.com/"
+            - ${self:provider.stage}
+            - "/monitor"
+    
+    DynamoDBTable:
+      Description: "DynamoDB table name (create manually)"
+      Value: ${self:custom.tableName}

@@ -1,0 +1,83 @@
+service: monitor-simple
+
+frameworkVersion: '3'
+
+provider:
+  name: aws
+  runtime: python3.11
+  stage: ${opt:stage, 'dev'}
+  region: ${opt:region, 'us-east-1'}
+  timeout: 30
+  memorySize: 512
+  architecture: arm64
+  
+  environment:
+    API_KEY: ${env:API_KEY}
+    API_SECRET: ${env:API_SECRET}
+    API_HOST: ${env:API_HOST}
+    SLACK_BOT_TOKEN: ${env:SLACK_BOT_TOKEN}
+    ALLOWED_CHANNELS: ${env:ALLOWED_CHANNELS, ''}
+    DYNAMODB_TABLE: monitor-bot-dev
+  
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action:
+            - lambda:InvokeFunction
+          Resource: 
+            - "arn:aws:lambda:${self:provider.region}:*:function:${self:service}-${self:provider.stage}-*"
+        - Effect: Allow
+          Action:
+            - dynamodb:GetItem
+            - dynamodb:PutItem
+            - dynamodb:UpdateItem
+            - dynamodb:Scan
+            - dynamodb:Query
+          Resource: 
+            - "arn:aws:dynamodb:${self:provider.region}:*:table/monitor-bot-${self:provider.stage}"
+
+functions:
+  monitor:
+    handler: monitor_handler.lambda_handler
+    events:
+      - http:
+          path: /monitor
+          method: post
+          cors: true
+      # Batch monitoring at 11:00 AM and 11:00 PM UTC
+      - schedule:
+          rate: cron(0 11,23 * * ? *)
+          input:
+            scheduled_check: true
+
+plugins:
+  - serverless-python-requirements
+
+package:
+  patterns:
+    - '!node_modules/**'
+    - '!.git/**'
+    - '!.env*'
+    - '!*.md'
+    - '!assets/**'
+    - '!utils/**'
+    - '!pnl_*'
+    - '!handler.py'
+    - '!Dockerfile'
+    - '!test_*'
+
+resources:
+  Outputs:
+    MonitorWebhookUrl:
+      Description: "Monitor Bot Webhook URL"
+      Value:
+        Fn::Join:
+          - ""
+          - - "https://"
+            - Ref: "ApiGatewayRestApi"
+            - ".execute-api."
+            - ${self:provider.region}
+            - ".amazonaws.com/"
+            - ${self:provider.stage}
+            - "/monitor"

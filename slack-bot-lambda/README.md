@@ -22,14 +22,24 @@ A comprehensive serverless Slack bot that generates trading reports using AWS La
   - Google Sheets data extraction (2000+ records)
   - Direct Slack file upload with S3 fallback
 
+### 3. Order Monitor Service (`/monitor`)
+- Real-time order monitoring: `/monitor orderid`
+- Provides immediate execution report and continuous monitoring:
+  - Current fill percentage and average net price
+  - Automated 8-hour status updates until 100% filled
+  - Final completion notification with cleanup
+  - DynamoDB state persistence for reliable monitoring
+- Lightweight service optimized for continuous operation
+
 ## Architecture
 
 ```
-Slack → API Gateway → Lambda Functions → External APIs → S3 → PDF Reports
+Slack → API Gateway → Lambda Functions → External APIs → S3/DynamoDB → Reports
 
 Services:
 - FLR Service: handler.py (lightweight)
 - P&L Service: pnl_handler.py (containerized with heavy dependencies)
+- Monitor Service: monitor_handler.py (lightweight, scheduled triggers)
 ```
 
 ## Setup
@@ -54,6 +64,17 @@ npm install serverless-python-requirements
 ```bash
 cp .env.example .env
 # Edit .env with your actual values
+```
+
+**Optional: Restrict Monitor Service to Specific Channels**
+```bash
+# Add to .env to restrict /monitor command to specific channels
+ALLOWED_CHANNELS=C1234567890,C0987654321
+
+# To find channel IDs:
+# 1. Right-click on channel name in Slack
+# 2. Select "Copy link"
+# 3. Extract ID from URL: https://workspace.slack.com/archives/C1234567890
 ```
 
 ### 4. Deploy (Optimized for Heavy Dependencies)
@@ -120,6 +141,7 @@ serverless logs -f pnlBotV2 -c pnl_serverless.yml
 3. Go to "Slash Commands" and create:
    - `/flr-report` → FLR service webhook URL
    - `/pnl-report` → P&L service webhook URL
+   - `/monitor` → Monitor service webhook URL
 4. Set the Request URLs to the webhook URLs from deployment output
 5. Add required bot scopes: `files:write`, `chat:write`
 6. Install the app to your workspace
@@ -143,6 +165,20 @@ In Slack, use the command:
 /pnl-report last    # Generate weekly P&L report
 /pnl-report help    # Show help information
 ```
+
+### Order Monitoring
+In Slack, use the command:
+```
+/monitor 87526ab1-e9a2-4d6e-920f-ab05c399ea9a    # Start monitoring order
+```
+
+**What happens:**
+1. **Immediate Report**: Current fill status with smart formatting (~7.10M FLR filled 70.96%)
+2. **Duplicate Detection**: Warns if order already being monitored
+3. **Batch Monitoring**: Groups all orders for scheduled updates
+4. **Scheduled Updates**: 11:00 AM & 11:00 PM UTC with all active orders
+5. **Auto Cleanup**: Completed orders automatically removed from monitoring
+6. **Channel Security**: Only works in authorized channels
 
 ## Local Testing
 
@@ -176,6 +212,25 @@ serverless logs -f pnlBotV2 -c pnl_serverless.yml
 serverless remove -c pnl_serverless.yml
 ```
 
+### Monitor Service
+```bash
+# Deploy Monitor service (with DynamoDB and EventBridge)
+serverless deploy -c monitor_simple.yml
+
+# View logs
+serverless logs -f monitor -c monitor_simple.yml
+
+# Check DynamoDB table
+aws dynamodb describe-table --table-name monitor-bot-dev
+
+# Manual batch check (for testing)
+aws lambda invoke --function-name monitor-simple-dev-monitor \
+  --payload '{"scheduled_check": true}' response.json
+
+# Remove Monitor deployment
+serverless remove -c monitor_simple.yml
+```
+
 ## Cost Analysis & Optimization
 
 ### FLR Service Cost (per report)
@@ -203,9 +258,28 @@ serverless remove -c pnl_serverless.yml
 - **S3 Storage:** PDF storage 2-3MB (~$0.0001)
 - **Google Sheets API:** Free tier (100 requests/100 seconds)
 
+### Monitor Service Cost (per order monitored)
+**Lambda Function:**
+- Memory: 512 MB (lightweight monitoring)
+- Timeout: 30 seconds
+- Architecture: ARM64 (20% cost savings)
+- Initial execution: ~2-5 seconds
+- Scheduled checks: ~1-2 seconds each
+- Cost: ~$0.001 per initial setup + ~$0.0001 per 8-hour check
+
+**DynamoDB:**
+- Pay-per-request billing (cost-effective for monitoring workload)
+- TTL enabled for automatic cleanup
+- Cost: ~$0.0000001 per read/write operation
+
+**EventBridge (Scheduled):**
+- Twice daily triggers (11:00 AM & 11:00 PM UTC)
+- Cost: ~$0.000001 per invocation (essentially free)
+
 **Total Estimated Costs:**
 - **FLR Report:** $0.002-0.007 per report
 - **P&L Report:** $0.008-0.013 per report + $0.20/month container storage
+- **Monitor Service:** $0.001-0.005 per order (depending on monitoring duration)
 
 ### Cost Optimizations Applied
 
@@ -221,6 +295,13 @@ serverless remove -c pnl_serverless.yml
 3. **29-second timeout** (API Gateway maximum)
 4. **Chart cleanup** removes temporary files immediately
 5. **Single container image** serves multiple chart generation needs
+
+**Monitor Service:**
+1. **ARM64 architecture** for 20% cost savings on compute
+2. **Lightweight memory** at 512MB for monitoring operations
+3. **Pay-per-request DynamoDB** eliminates idle costs
+4. **TTL-enabled cleanup** prevents storage cost accumulation
+5. **8-hour intervals** balance timeliness with cost efficiency
 
 ### ⚠️ Monitoring Recommendations
 
