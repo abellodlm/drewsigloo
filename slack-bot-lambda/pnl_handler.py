@@ -160,16 +160,21 @@ def handle_async_processing(event):
             # Send follow-up message confirming upload
             if response_url:
                 print(f"Sending follow-up message to: {response_url}")
+                # Extract key metrics for display
+                weekly_pnl = metrics.get("Weekly PnL", "N/A")
+                weekly_volume = metrics.get("Client Volume", "N/A") 
+                weekly_margin = metrics.get("Weekly Margin", "N/A")
+                
                 if 's3.amazonaws.com' in file_url:
                     # S3 fallback was used
                     send_follow_up_message(response_url, {
-                        'text': f'✅ **P&L Report Complete!**\n📊 **Hex Trust Trading Summary**\nPeriod: {date_range}\nDownload: {file_url}',
+                        'text': f'✅ **P&L Report Complete!**\n📊 **Hex Trust Trading Summary**\n**Period:** {date_range}\n**Weekly P&L:** {weekly_pnl}\n**Weekly Volume:** {weekly_volume}\n**Weekly Margin:** {weekly_margin}\n\n📄 Download: {file_url}',
                         'response_type': 'ephemeral'
                     })
                 else:
                     # Slack upload succeeded
                     send_follow_up_message(response_url, {
-                        'text': f'✅ **P&L Report Complete!**\n📊 **Hex Trust Trading Summary**\nPeriod: {date_range}\nReport has been uploaded to this channel',
+                        'text': f'✅ **P&L Report Complete!**\n📊 **Hex Trust Trading Summary**\n**Period:** {date_range}\n**Weekly P&L:** {weekly_pnl}\n**Weekly Volume:** {weekly_volume}\n**Weekly Margin:** {weekly_margin}\n\n📄 Report has been uploaded to this channel',
                         'response_type': 'ephemeral'
                     })
                 print("Follow-up message sent successfully")
