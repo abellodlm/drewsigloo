@@ -45,9 +45,9 @@ functions:
           path: /monitor
           method: post
           cors: true
-      # Batch monitoring at 11:00 AM and 11:00 PM UTC
+      # Batch monitoring at 10:30 AM and 10:30 PM UTC
       - schedule:
-          rate: cron(0 11,23 * * ? *)
+          rate: cron(30 10,22 * * ? *)
           input:
             scheduled_check: true
 

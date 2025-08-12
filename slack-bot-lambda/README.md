@@ -24,22 +24,30 @@ A comprehensive serverless Slack bot that generates trading reports using AWS La
 
 ### 3. Order Monitor Service (`/monitor`)
 - Real-time order monitoring: `/monitor orderid`
-- Provides immediate execution report and continuous monitoring:
+- Provides immediate execution report and continuous real-time monitoring:
   - Current fill percentage and average net price
-  - Automated 8-hour status updates until 100% filled
+  - **Real-time WebSocket notifications** on status changes and order completion
+  - Automated batch updates: 10:30 AM & 10:30 PM UTC
   - Final completion notification with cleanup
   - DynamoDB state persistence for reliable monitoring
-- Lightweight service optimized for continuous operation
+- **EC2-based real-time service** with persistent Talos WebSocket connection
 
 ## Architecture
 
 ```
 Slack → API Gateway → Lambda Functions → External APIs → S3/DynamoDB → Reports
+                              ↓
+                     EC2 Real-time Monitor
+                              ↓
+                    Talos WebSocket Stream
+                              ↓
+                    Direct Slack Notifications
 
 Services:
 - FLR Service: handler.py (lightweight)
-- P&L Service: pnl_handler.py (containerized with heavy dependencies)
+- P&L Service: pnl_handler.py (containerized with heavy dependencies)  
 - Monitor Service: monitor_handler.py (lightweight, scheduled triggers)
+- Real-time Monitor: ec2_talos_monitor.py (EC2-based WebSocket client)
 ```
 
 ## Setup
@@ -174,9 +182,9 @@ In Slack, use the command:
 
 **What happens:**
 1. **Immediate Report**: Current fill status with smart formatting (~7.10M FLR filled 70.96%)
-2. **Duplicate Detection**: Warns if order already being monitored
-3. **Batch Monitoring**: Groups all orders for scheduled updates
-4. **Scheduled Updates**: 11:00 AM & 11:00 PM UTC with all active orders
+2. **Real-time Activation**: Order registered for live WebSocket monitoring
+3. **Live Notifications**: Instant Slack updates on status changes and order completion
+4. **Scheduled Updates**: 10:30 AM & 10:30 PM UTC batch reports  
 5. **Auto Cleanup**: Completed orders automatically removed from monitoring
 6. **Channel Security**: Only works in authorized channels
 
@@ -223,12 +231,26 @@ serverless logs -f monitor -c monitor_simple.yml
 # Check DynamoDB table
 aws dynamodb describe-table --table-name monitor-bot-dev
 
-# Manual batch check (for testing)
-aws lambda invoke --function-name monitor-simple-dev-monitor \
-  --payload '{"scheduled_check": true}' response.json
-
 # Remove Monitor deployment
 serverless remove -c monitor_simple.yml
+```
+
+### Real-time Monitor (EC2)
+```bash
+# Deploy EC2 real-time monitor with Terraform
+cd terraform/
+cp terraform.tfvars.example terraform.tfvars
+# Edit terraform.tfvars with your credentials
+
+terraform init
+terraform plan
+terraform apply
+
+# Check EC2 instance logs
+aws logs tail /aws/ec2/talos-monitor-dev
+
+# Remove EC2 deployment  
+terraform destroy
 ```
 
 ## Cost Analysis & Optimization
@@ -273,13 +295,26 @@ serverless remove -c monitor_simple.yml
 - Cost: ~$0.0000001 per read/write operation
 
 **EventBridge (Scheduled):**
-- Twice daily triggers (11:00 AM & 11:00 PM UTC)
+- Twice daily triggers (10:30 AM & 10:30 PM UTC)
 - Cost: ~$0.000001 per invocation (essentially free)
+
+### Real-time Monitor Cost (24/7 operation)
+**EC2 Instance:**
+- Instance: t3.micro (1 vCPU, 1GB RAM)
+- Architecture: x86_64 (WebSocket library compatibility)
+- Always-on operation for persistent WebSocket connection
+- Cost: ~$8.50/month
+
+**Additional Services:**
+- **EBS Storage:** 30GB GP3 (~$1.00/month)
+- **CloudWatch Logs:** ~$0.50/month
+- **Data Transfer:** ~$0.50/month (WebSocket + Slack API)
 
 **Total Estimated Costs:**
 - **FLR Report:** $0.002-0.007 per report
 - **P&L Report:** $0.008-0.013 per report + $0.20/month container storage
 - **Monitor Service:** $0.001-0.005 per order (depending on monitoring duration)
+- **Real-time Monitor:** $10.50/month (unlimited real-time monitoring)
 
 ### Cost Optimizations Applied
 

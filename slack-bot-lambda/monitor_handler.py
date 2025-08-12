@@ -26,6 +26,8 @@ try:
 except Exception as e:
     print(f"Warning: DynamoDB not available: {e}")
     MONITOR_TABLE = None
+
+# Real-time monitoring now handled by EC2 service
 LAMBDA_CLIENT = boto3.client('lambda')
 
 # Connection pooling for requests
@@ -192,11 +194,14 @@ def handle_async_processing(event):
         # Try to store monitoring job in DynamoDB
         stored = store_monitoring_job(order_id, channel_id, user_id, execution_status['is_complete'])
         
+        # Real-time monitoring is now handled automatically by EC2 service
+        # No additional registration needed - EC2 monitors all orders in DynamoDB
+        
         # Send initial report with batch monitoring info
         if execution_status['is_complete']:
             final_message = f"{report_message}\n\n_Order is complete - no monitoring needed._"
         else:
-            final_message = f"{report_message}\n\n✅ **Added to monitoring batch**\n_Next updates: 11:00 AM & 11:00 PM UTC with all active orders_"
+            final_message = f"{report_message}\n\n✅ **Real-time monitoring activated**\n_• Live updates on status changes & significant fills_\n_• Batch updates: 10:30 AM & 10:30 PM UTC_"
         
         if response_url:
             send_follow_up_message(response_url, {
@@ -533,6 +538,8 @@ def store_monitoring_job(order_id, channel_id, user_id, is_complete):
     except Exception as e:
         print(f"Error storing monitoring job: {str(e)}")
         return False
+
+# Real-time monitoring registration removed - EC2 service handles all monitoring automatically
 
 def send_follow_up_message(response_url, message):
     """

@@ -4,3 +4,4 @@ node_modules/
 .serverless/
 aws/
 awscliv2.zip
+terraform/terraform.tfvars
