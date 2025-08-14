@@ -5,3 +5,4 @@ node_modules/
 aws/
 awscliv2.zip
 terraform/terraform.tfvars
+EC2_DEPLOYMENT.md
