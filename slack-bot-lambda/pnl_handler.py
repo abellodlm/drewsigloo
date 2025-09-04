@@ -9,7 +9,7 @@ import tempfile
 import pandas as pd
 import gc
 from utils.google_sheets import extract_pnl_data, save_pnl_export
-from utils.calculations import run_calculations
+from utils.calculations import run_calculations, get_client_data
 from utils.chart_generator import generate_pnl_charts, cleanup_chart_files
 from utils.pdf_builder import generate_pdf_report
 
@@ -21,7 +21,10 @@ CONFIG = {
 
 # Create reusable AWS clients to avoid recreating them
 S3_CLIENT = boto3.client('s3')
-LAMBDA_CLIENT = boto3.client('lambda')
+LAMBDA_CLIENT = boto3.client('lambda', config=boto3.session.Config(
+    connect_timeout=2,  # 2 second connection timeout
+    read_timeout=3      # 3 second read timeout 
+))
 
 # Connection pooling for requests - reuse connections for better performance
 SESSION = requests.Session()
@@ -71,6 +74,16 @@ def lambda_handler(event, context):
                     })
                 }
             
+            # Validate channel - only allow in specific channels  
+            if channel_id not in ['C09DM91PG7L', 'C07KJV25M0X']:
+                return {
+                    'statusCode': 200,
+                    'body': json.dumps({
+                        'text': '❌ This command can only be used in the designated P&L channel. Please use the command in the correct channel or DM.',
+                        'response_type': 'ephemeral'
+                    })
+                }
+            
             # Validate parameters
             if text != 'last':
                 return {
@@ -81,42 +94,35 @@ def lambda_handler(event, context):
                     })
                 }
             
-            # Immediate response to Slack
-            immediate_response = {
+            # Start async processing in background (don't wait for result)
+            async_payload = {
+                'async_processing': True,
+                'report_type': text,
+                'user_id': user_id,
+                'channel_id': channel_id,
+                'response_url': response_url
+            }
+            
+            # Fire and forget - start async processing without waiting
+            try:
+                LAMBDA_CLIENT.invoke(
+                    FunctionName=context.function_name,
+                    InvocationType='Event',
+                    Payload=json.dumps(async_payload)
+                )
+                print("Async P&L processing started successfully")
+            except Exception as e:
+                print(f"Error starting async processing: {str(e)}")
+                # Don't send follow-up error here to avoid blocking the immediate response
+            
+            # Always return immediate response to Slack (regardless of async start status)
+            return {
                 'statusCode': 200,
                 'body': json.dumps({
                     'text': '🔄 Generating P&L report for last week... This may take up to 2 minutes.',
                     'response_type': 'ephemeral'
                 })
             }
-            
-            # Start async processing
-            try:
-                async_payload = {
-                    'async_processing': True,
-                    'report_type': text,
-                    'user_id': user_id,
-                    'channel_id': channel_id,
-                    'response_url': response_url
-                }
-                
-                LAMBDA_CLIENT.invoke(
-                    FunctionName=context.function_name,
-                    InvocationType='Event',
-                    Payload=json.dumps(async_payload)
-                )
-                
-                print("Async P&L processing started successfully")
-                
-            except Exception as e:
-                print(f"Error starting async processing: {str(e)}")
-                if response_url:
-                    send_follow_up_message(response_url, {
-                        'text': f'Error starting P&L report generation: {str(e)}',
-                        'response_type': 'ephemeral'
-                    })
-            
-            return immediate_response
             
     except Exception as e:
         return {
@@ -170,7 +176,7 @@ def handle_async_processing(event):
         # Upload PDF
         filename = f"Hex Trust Trading Summary {date_range.replace('/', '-')}.pdf"
         try:
-            file_url = upload_pdf_to_slack(pdf_content, filename, channel_id)
+            file_url = upload_pdf_to_slack(pdf_content, filename, channel_id, user_id)
             print(f"PDF uploaded successfully: {file_url}")
             
             # Send follow-up message confirming upload
@@ -181,18 +187,39 @@ def handle_async_processing(event):
                 weekly_volume = metrics.get("Client Volume", "N/A") 
                 weekly_margin = metrics.get("Weekly Margin", "N/A")
                 
-                if 's3.amazonaws.com' in file_url:
-                    # S3 fallback was used
-                    send_follow_up_message(response_url, {
-                        'text': f'✅ **P&L Report Complete!**\n📊 **Hex Trust Trading Summary**\n**Period:** {date_range}\n**Weekly P&L:** {weekly_pnl}\n**Weekly Volume:** {weekly_volume}\n**Weekly Margin:** {weekly_margin}\n\n📄 Download: {file_url}',
-                        'response_type': 'ephemeral'
-                    })
-                else:
-                    # Slack upload succeeded
-                    send_follow_up_message(response_url, {
-                        'text': f'✅ **P&L Report Complete!**\n📊 **Hex Trust Trading Summary**\n**Period:** {date_range}\n**Weekly P&L:** {weekly_pnl}\n**Weekly Volume:** {weekly_volume}\n**Weekly Margin:** {weekly_margin}\n\n📄 Report has been uploaded to this channel',
-                        'response_type': 'ephemeral'
-                    })
+                # Get top 5 clients data
+                try:
+                    client_data, _ = get_client_data(cutoff_date, csv_file_path)
+                    if not client_data.empty:
+                        # Calculate total P&L for percentage calculation
+                        total_pnl = client_data["Total P&L (USD)"].sum()
+                        
+                        # Sort by P&L and get top 5
+                        top_clients = client_data.sort_values("Total P&L (USD)", ascending=False).head(5)
+                        
+                        # Format top 5 clients with percentages
+                        top_clients_text = "\n\nTop 5 Clients by P&L:"
+                        for _, row in top_clients.iterrows():
+                            client_name = row["Client Name"]
+                            client_pnl = row["Total P&L (USD)"]
+                            pnl_percentage = (client_pnl / total_pnl * 100) if total_pnl != 0 else 0
+                            top_clients_text += f"\n• {client_name}: {pnl_percentage:.1f}%"
+                    else:
+                        top_clients_text = "\n\nTop 5 Clients: No data available"
+                except Exception as e:
+                    print(f"Error getting top 5 clients: {e}")
+                    top_clients_text = "\n\nTop 5 Clients: Unable to retrieve data"
+                
+                # Format date range for cleaner display (remove leading zeros and year)
+                clean_date_range = date_range.replace('/2025', '').replace('/', '/')
+                # Format P&L value without dollar sign for consistency
+                clean_pnl = weekly_pnl.replace('$', '') if isinstance(weekly_pnl, str) else weekly_pnl
+                
+                # Enhanced message with top 5 clients
+                send_follow_up_message(response_url, {
+                    'text': f'Attached is the weekly trading summary for {clean_date_range}\nWeekly P&L: {clean_pnl}\nWeekly Volume: {weekly_volume}\nWeekly Margin: {weekly_margin}{top_clients_text}',
+                    'response_type': 'ephemeral'
+                })
                 print("Follow-up message sent successfully")
                 
         except Exception as e:
@@ -274,7 +301,7 @@ def calculate_cutoff_date():
     # For production, we use the calculated date:
     return cutoff_date
 
-def upload_pdf_to_slack(pdf_content, filename, channel_id):
+def upload_pdf_to_slack(pdf_content, filename, channel_id, user_id=None):
     """
     Upload PDF to Slack with multiple fallback approaches
     """
@@ -284,22 +311,15 @@ def upload_pdf_to_slack(pdf_content, filename, channel_id):
     
     print(f"Attempting to upload PDF to Slack channel: {channel_id}")
     
-    # Method 1: Try new API workflow
+    # Channel-specific Slack upload only
+    print(f"Uploading PDF directly to channel: {channel_id}")
     try:
-        return upload_via_new_api(pdf_content, filename, channel_id, bot_token)
+        return upload_via_new_api(pdf_content, filename, channel_id, bot_token, user_id)
     except Exception as e:
-        print(f"New API method failed: {e}")
-    
-    # Method 2: Fallback to S3 upload with Slack message
-    try:
-        print("Falling back to S3 upload with Slack notification")
-        s3_url = upload_pdf_to_s3(pdf_content, filename)
-        return s3_url
-    except Exception as e:
-        print(f"S3 fallback failed: {e}")
-        raise Exception("All upload methods failed")
+        print(f"Slack upload failed: {e}")
+        raise Exception(f"Failed to upload to Slack: {e}")
 
-def upload_via_new_api(pdf_content, filename, channel_id, bot_token):
+def upload_via_new_api(pdf_content, filename, channel_id, bot_token, user_id=None):
     """
     Upload using the new 3-step API workflow with enhanced debugging
     """
@@ -425,7 +445,14 @@ def upload_via_new_api(pdf_content, filename, channel_id, bot_token):
     print(f"Complete upload response: {complete_data}")
     
     if complete_data.get('ok'):
-        return complete_data['files'][0]['permalink'] if complete_data.get('files') else 'Upload completed'
+        if complete_data.get('files'):
+            file_info = complete_data['files'][0]
+            # Prefer public URL or direct download URL over permalink
+            return (file_info.get('url_private_download') or 
+                   file_info.get('permalink_public') or 
+                   file_info.get('permalink') or 
+                   'Upload completed')
+        return 'Upload completed'
     else:
         raise Exception(f"Failed to complete upload: {complete_data.get('error')}")
 

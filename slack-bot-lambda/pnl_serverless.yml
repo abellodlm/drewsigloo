@@ -8,7 +8,7 @@ provider:
   stage: ${opt:stage, 'dev'}
   region: ${opt:region, 'us-east-1'}
   timeout: 29  # Max for API Gateway
-  memorySize: 2048  # Increase memory for chart generation
+  memorySize: 3008  # Increase memory for faster CPU and chart generation
   architecture: x86_64
   
   # Use container packaging for heavy dependencies
@@ -29,6 +29,7 @@ provider:
     GOOGLE_PRIVATE_KEY_ID: ${ssm:/pnl-bot/GOOGLE_PRIVATE_KEY_ID}
     GOOGLE_CLIENT_ID: ${ssm:/pnl-bot/GOOGLE_CLIENT_ID}
     GOOGLE_SHEET_ID: ${ssm:/pnl-bot/GOOGLE_SHEET_ID}
+    MPLCONFIGDIR: /tmp/matplotlib
   
   iam:
     role:
